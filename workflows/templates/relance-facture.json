@@ -1,0 +1,92 @@
+{
+  "id": "tpl-relance-facture",
+  "name": "Relance facture impayée",
+  "description": "Envoie un email de relance pour les factures impayées après J+7, puis un SMS à J+14",
+  "version": 1,
+  "status": "DRAFT",
+  "trigger": {
+    "type": "invoice_overdue",
+    "config": {
+      "delayDays": 7
+    }
+  },
+  "steps": [
+    {
+      "id": "step-1-check",
+      "name": "Vérifier le montant",
+      "type": "enrich",
+      "config": {
+        "data": {
+          "relance": {
+            "niveau": 1,
+            "date": "{{now | format:'DD/MM/YYYY'}}"
+          }
+        }
+      },
+      "condition": {
+        "field": "facture.montant",
+        "operator": "greater_than",
+        "value": 0
+      },
+      "onError": "stop"
+    },
+    {
+      "id": "step-2-email",
+      "name": "Envoyer email de relance",
+      "type": "send_email",
+      "config": {
+        "to": "{{patient.email}}",
+        "subject": "Rappel — Facture n°{{facture.numero}} en attente",
+        "body": "Bonjour {{patient.prenom}},\n\nNous vous rappelons que la facture n°{{facture.numero}} d'un montant de {{facture.montant}}€ reste en attente de paiement.\n\nMerci de procéder au règlement dans les meilleurs délais.\n\nCordialement,\nCabinet Saint-Michel"
+      },
+      "onError": "retry",
+      "retryConfig": {
+        "maxRetries": 2,
+        "backoffMs": 2000,
+        "backoffMultiplier": 2
+      }
+    },
+    {
+      "id": "step-3-delay",
+      "name": "Attendre 7 jours",
+      "type": "delay",
+      "config": {
+        "duration": 604800000
+      },
+      "onError": "skip"
+    },
+    {
+      "id": "step-4-sms",
+      "name": "Envoyer SMS de relance (J+14)",
+      "type": "send_sms",
+      "config": {
+        "to": "{{patient.telephone}}",
+        "body": "Bonjour {{patient.prenom}}, la facture n°{{facture.numero}} ({{facture.montant}}€) est toujours en attente. Merci de nous contacter au 01 42 34 56 78. Cabinet Saint-Michel"
+      },
+      "onError": "retry",
+      "retryConfig": {
+        "maxRetries": 3,
+        "backoffMs": 1000,
+        "backoffMultiplier": 2
+      }
+    },
+    {
+      "id": "step-5-log",
+      "name": "Logger la relance",
+      "type": "log",
+      "config": {
+        "message": "Relance facture {{facture.numero}} envoyée à {{patient.prenom}} {{patient.nom}}"
+      },
+      "onError": "skip"
+    }
+  ],
+  "variables": [
+    { "name": "patient.prenom", "type": "string", "required": true },
+    { "name": "patient.nom", "type": "string", "required": true },
+    { "name": "patient.email", "type": "string", "required": true },
+    { "name": "patient.telephone", "type": "string", "required": true },
+    { "name": "facture.numero", "type": "string", "required": true },
+    { "name": "facture.montant", "type": "number", "required": true }
+  ],
+  "tags": ["facturation", "relance", "email", "sms"]
+}

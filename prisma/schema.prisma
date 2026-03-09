@@ -1,0 +1,203 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// === Organisation (tenant) ===
+
+model Organization {
+  id        String   @id @default(uuid())
+  name      String
+  slug      String   @unique
+  settings  Json     @default("{}")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  users     User[]
+  workflows Workflow[]
+  auditLogs AuditLog[]
+  secrets   Secret[]
+
+  @@map("organizations")
+}
+
+// === Utilisateur ===
+
+enum UserRole {
+  ADMIN
+  MANAGER
+  MEMBER
+  VIEWER
+}
+
+model User {
+  id             String       @id @default(uuid())
+  email          String       @unique
+  passwordHash   String       @map("password_hash")
+  firstName      String       @map("first_name")
+  lastName       String       @map("last_name")
+  role           UserRole     @default(MEMBER)
+  organizationId String       @map("organization_id")
+  isActive       Boolean      @default(true) @map("is_active")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+  workflows    Workflow[]   @relation("CreatedByUser")
+  auditLogs    AuditLog[]
+
+  @@index([organizationId])
+  @@map("users")
+}
+
+// === Workflow ===
+
+enum WorkflowStatus {
+  DRAFT
+  TESTING
+  LIVE
+  ARCHIVED
+}
+
+model Workflow {
+  id             String         @id @default(uuid())
+  name           String
+  description    String         @default("")
+  version        Int            @default(1)
+  status         WorkflowStatus @default(DRAFT)
+  trigger        Json           // Type + config du déclencheur
+  steps          Json           // Array de steps (Step[])
+  variables      Json           @default("[]") // Variables du workflow
+  tags           String[]       @default([])
+  organizationId String         @map("organization_id")
+  createdById    String         @map("created_by_id")
+  executionCount Int            @default(0) @map("execution_count")
+  lastExecutedAt DateTime?      @map("last_executed_at")
+  createdAt      DateTime       @default(now()) @map("created_at")
+  updatedAt      DateTime       @updatedAt @map("updated_at")
+
+  organization Organization      @relation(fields: [organizationId], references: [id])
+  createdBy    User              @relation("CreatedByUser", fields: [createdById], references: [id])
+  executions   Execution[]
+  versions     WorkflowVersion[]
+
+  @@index([organizationId])
+  @@index([status])
+  @@index([organizationId, status])
+  @@map("workflows")
+}
+
+// === Version de workflow (snapshot) ===
+
+model WorkflowVersion {
+  id         String   @id @default(uuid())
+  workflowId String   @map("workflow_id")
+  version    Int
+  snapshot   Json     // Copie complète du workflow à cette version
+  changelog  String   @default("")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  workflow Workflow @relation(fields: [workflowId], references: [id])
+
+  @@unique([workflowId, version])
+  @@index([workflowId])
+  @@map("workflow_versions")
+}
+
+// === Exécution ===
+
+enum ExecutionStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+model Execution {
+  id              String          @id @default(uuid())
+  workflowId      String          @map("workflow_id")
+  workflowVersion Int             @map("workflow_version")
+  status          ExecutionStatus @default(PENDING)
+  trigger         Json            // Payload du déclencheur
+  context         Json            @default("{}") // Contexte enrichi
+  steps           Json            @default("[]") // Résultats step par step
+  idempotencyKey  String?         @unique @map("idempotency_key")
+  isSandbox       Boolean         @default(false) @map("is_sandbox")
+  error           String?
+  startedAt       DateTime        @default(now()) @map("started_at")
+  completedAt     DateTime?       @map("completed_at")
+  duration        Int?            // Durée en ms
+
+  workflow Workflow @relation(fields: [workflowId], references: [id])
+
+  @@index([workflowId])
+  @@index([status])
+  @@index([workflowId, status])
+  @@index([startedAt])
+  @@map("executions")
+}
+
+// === Template de message ===
+
+model MessageTemplate {
+  id             String   @id @default(uuid())
+  name           String
+  channel        String   // sms | email | whatsapp
+  subject        String?  // Pour email uniquement
+  body           String   // Corps du message avec {{variables}}
+  variables      String[] @default([]) // Liste des variables attendues
+  version        Int      @default(1)
+  organizationId String   @map("organization_id")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@index([organizationId])
+  @@index([channel])
+  @@map("message_templates")
+}
+
+// === Secrets (API keys chiffrées) ===
+
+model Secret {
+  id             String   @id @default(uuid())
+  alias          String   // Nom de référence (ex: twilio_api_key)
+  encryptedValue String   @map("encrypted_value") // AES-256-GCM
+  iv             String   // Vecteur d'initialisation
+  organizationId String   @map("organization_id")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@unique([organizationId, alias])
+  @@index([organizationId])
+  @@map("secrets")
+}
+
+// === Audit Log ===
+
+model AuditLog {
+  id             String   @id @default(uuid())
+  action         String   // create_workflow, update_workflow, execute_workflow, etc.
+  resource       String   // workflow, execution, template, etc.
+  resourceId     String   @map("resource_id")
+  details        Json     @default("{}") // Détails de l'action
+  userId         String   @map("user_id")
+  organizationId String   @map("organization_id")
+  ipAddress      String?  @map("ip_address")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  user         User         @relation(fields: [userId], references: [id])
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@index([organizationId])
+  @@index([userId])
+  @@index([resource, resourceId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}

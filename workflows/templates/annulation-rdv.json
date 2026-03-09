@@ -1,0 +1,86 @@
+{
+  "id": "tpl-annulation-rdv",
+  "name": "Gestion annulation RDV",
+  "description": "Quand un patient annule son RDV, envoie une confirmation et propose un nouveau créneau",
+  "version": 1,
+  "status": "DRAFT",
+  "trigger": {
+    "type": "rdv_cancelled",
+    "config": {
+      "source": "doctolib"
+    }
+  },
+  "steps": [
+    {
+      "id": "step-1-enrich",
+      "name": "Enrichir avec infos cabinet",
+      "type": "enrich",
+      "config": {
+        "data": {
+          "cabinet": {
+            "nom": "Cabinet Saint-Michel",
+            "lien_rdv": "https://doctolib.fr/cabinet-saint-michel"
+          }
+        }
+      },
+      "onError": "stop"
+    },
+    {
+      "id": "step-2-sms-confirm",
+      "name": "Confirmer l'annulation par SMS",
+      "type": "send_sms",
+      "config": {
+        "to": "{{patient.telephone}}",
+        "body": "Bonjour {{patient.prenom}}, votre RDV du {{rdv.date | format:'DD/MM/YYYY'}} avec Dr {{medecin.nom}} a bien été annulé."
+      },
+      "onError": "retry",
+      "retryConfig": {
+        "maxRetries": 2,
+        "backoffMs": 1000,
+        "backoffMultiplier": 2
+      }
+    },
+    {
+      "id": "step-3-delay",
+      "name": "Attendre 1 heure",
+      "type": "delay",
+      "config": {
+        "duration": 3600000
+      },
+      "onError": "skip"
+    },
+    {
+      "id": "step-4-repropose",
+      "name": "Proposer un nouveau créneau",
+      "type": "send_sms",
+      "config": {
+        "to": "{{patient.telephone}}",
+        "body": "{{patient.prenom}}, souhaitez-vous reprendre un RDV avec Dr {{medecin.nom}} ? Réservez en ligne : {{cabinet.lien_rdv}}"
+      },
+      "condition": {
+        "field": "rdv.motif_annulation",
+        "operator": "not_equals",
+        "value": "changement_medecin"
+      },
+      "onError": "skip"
+    },
+    {
+      "id": "step-5-log",
+      "name": "Logger l'annulation",
+      "type": "log",
+      "config": {
+        "message": "Annulation RDV traitée pour {{patient.prenom}} {{patient.nom}} — motif : {{rdv.motif_annulation | default:'non précisé'}}"
+      },
+      "onError": "skip"
+    }
+  ],
+  "variables": [
+    { "name": "patient.prenom", "type": "string", "required": true },
+    { "name": "patient.nom", "type": "string", "required": true },
+    { "name": "patient.telephone", "type": "string", "required": true },
+    { "name": "medecin.nom", "type": "string", "required": true },
+    { "name": "rdv.date", "type": "date", "required": true },
+    { "name": "rdv.motif_annulation", "type": "string", "required": false }
+  ],
+  "tags": ["rdv", "annulation", "sms"]
+}

@@ -1,0 +1,63 @@
+{
+  "id": "tpl-confirmation-rdv",
+  "name": "Confirmation de rendez-vous",
+  "description": "Envoie un SMS de confirmation au patient après la prise d'un rendez-vous Doctolib",
+  "version": 1,
+  "status": "DRAFT",
+  "trigger": {
+    "type": "rdv_created",
+    "config": {
+      "source": "doctolib"
+    }
+  },
+  "steps": [
+    {
+      "id": "step-1-enrich",
+      "name": "Enrichir avec les données patient",
+      "type": "enrich",
+      "config": {
+        "data": {
+          "cabinet": {
+            "nom": "Cabinet Saint-Michel",
+            "adresse": "12 rue Saint-Michel, 75006 Paris",
+            "telephone": "01 42 34 56 78"
+          }
+        }
+      },
+      "onError": "stop"
+    },
+    {
+      "id": "step-2-sms",
+      "name": "Envoyer SMS de confirmation",
+      "type": "send_sms",
+      "config": {
+        "to": "{{patient.telephone}}",
+        "body": "Bonjour {{patient.prenom}}, votre RDV avec Dr {{medecin.nom}} est confirmé le {{rdv.date | format:'DD/MM/YYYY'}} à {{rdv.heure}}. Cabinet Saint-Michel — 01 42 34 56 78"
+      },
+      "onError": "retry",
+      "retryConfig": {
+        "maxRetries": 3,
+        "backoffMs": 1000,
+        "backoffMultiplier": 2
+      }
+    },
+    {
+      "id": "step-3-log",
+      "name": "Logger la confirmation",
+      "type": "log",
+      "config": {
+        "message": "SMS de confirmation envoyé à {{patient.prenom}} {{patient.nom}}"
+      },
+      "onError": "skip"
+    }
+  ],
+  "variables": [
+    { "name": "patient.prenom", "type": "string", "required": true },
+    { "name": "patient.nom", "type": "string", "required": true },
+    { "name": "patient.telephone", "type": "string", "required": true },
+    { "name": "medecin.nom", "type": "string", "required": true },
+    { "name": "rdv.date", "type": "date", "required": true },
+    { "name": "rdv.heure", "type": "string", "required": true }
+  ],
+  "tags": ["rdv", "confirmation", "sms"]
+}
