@@ -2,6 +2,7 @@ import { Prisma, WorkflowStatus } from '@prisma/client';
 import prisma from './prisma-client';
 import { WorkflowDefinition, Step, Trigger, Variable } from '../models/types';
 import { PaginationOptions, PaginatedResult } from '../models/pagination';
+import { WorkflowNotFoundError } from '../errors/workflow-errors';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('workflow-repository');
@@ -50,7 +51,7 @@ export class WorkflowRepository {
   ): Promise<WorkflowDefinition> {
     // Récupérer la version actuelle
     const current = await prisma.workflow.findUnique({ where: { id } });
-    if (!current) throw new Error(`Workflow "${id}" introuvable`);
+    if (!current) throw new WorkflowNotFoundError(id);
 
     const newVersion = current.version + 1;
 

@@ -278,8 +278,8 @@ export class WorkflowEngine {
           await this.executionRepo.updateSteps(execution.id, execution.steps);
         }
 
-        // Si le step a échoué et la stratégie est "stop", arrêter
-        if (stepResult.status === 'failed' && step.onError === 'stop') {
+        // Si le step a échoué et la stratégie est "stop" ou "retry" (retries épuisés), arrêter
+        if (stepResult.status === 'failed' && (step.onError === 'stop' || step.onError === 'retry')) {
           execution.status = 'FAILED';
           execution.error = stepResult.error;
           break;

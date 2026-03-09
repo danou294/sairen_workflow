@@ -113,7 +113,7 @@ describe('WorkflowEngine', () => {
     it('devrait refuser une transition invalide DRAFT → LIVE', () => {
       const wf = createTestWorkflow({ status: 'DRAFT' });
       engine.register(wf);
-      expect(() => engine.changeStatus('test-wf-1', 'LIVE')).toThrow('Transition invalide');
+      expect(() => engine.changeStatus('test-wf-1', 'LIVE')).toThrow(InvalidTransitionError);
     });
 
     it('devrait permettre LIVE → ARCHIVED', () => {
@@ -140,11 +140,11 @@ describe('WorkflowEngine', () => {
     it('devrait refuser ARCHIVED → LIVE', () => {
       const wf = createTestWorkflow({ status: 'ARCHIVED' });
       engine.register(wf);
-      expect(() => engine.changeStatus('test-wf-1', 'LIVE')).toThrow('Transition invalide');
+      expect(() => engine.changeStatus('test-wf-1', 'LIVE')).toThrow(InvalidTransitionError);
     });
 
     it('devrait rejeter un changement sur un workflow inexistant', () => {
-      expect(() => engine.changeStatus('inexistant', 'TESTING')).toThrow('introuvable');
+      expect(() => engine.changeStatus('inexistant', 'TESTING')).toThrow(WorkflowNotFoundError);
     });
   });
 
@@ -161,7 +161,7 @@ describe('WorkflowEngine', () => {
     });
 
     it('devrait rejeter un workflow inexistant', async () => {
-      await expect(engine.execute('inexistant', {})).rejects.toThrow('introuvable');
+      await expect(engine.execute('inexistant', {})).rejects.toThrow(WorkflowNotFoundError);
     });
 
     it('devrait rejeter l\'exécution d\'un workflow DRAFT', async () => {
@@ -382,7 +382,7 @@ describe('WorkflowEngine', () => {
           {
             id: 'step-retry',
             name: 'Retry step',
-            type: 'flaky_action' as 'log',
+            type: 'flaky_action',
             config: {},
             onError: 'retry',
             retryConfig: { maxRetries: 3, backoffMs: 1, backoffMultiplier: 1 },
@@ -398,6 +398,32 @@ describe('WorkflowEngine', () => {
       expect(result.steps[0].retryCount).toBe(2);
     });
 
+    it('devrait échouer après tous les retries', async () => {
+      engine.registerAction('always_fail', async () => {
+        throw new Error('Toujours KO');
+      });
+
+      const wf = createTestWorkflow({
+        steps: [
+          {
+            id: 'step-retry-fail',
+            name: 'Retry total fail',
+            type: 'always_fail',
+            config: {},
+            onError: 'retry',
+            retryConfig: { maxRetries: 2, backoffMs: 1, backoffMultiplier: 1 },
+          },
+        ],
+      });
+
+      engine.register(wf);
+      const result = await engine.execute('test-wf-1', {});
+
+      expect(result.status).toBe('FAILED');
+      expect(result.steps[0].status).toBe('failed');
+      expect(result.steps[0].retryCount).toBe(2);
+    });
+
     it('devrait interpoler la config de manière récursive', async () => {
       engine.registerAction('check_config', async (step) => {
         return step.config;
@@ -408,7 +434,7 @@ describe('WorkflowEngine', () => {
           {
             id: 'step-interp',
             name: 'Interpolation récursive',
-            type: 'check_config' as 'log',
+            type: 'check_config',
             config: {
               message: 'Bonjour {{prenom}}',
               nested: { greeting: 'Salut {{prenom}}' },
@@ -458,7 +484,7 @@ describe('WorkflowEngine', () => {
           {
             id: 'step-unknown',
             name: 'Action inconnue',
-            type: 'unknown_action' as 'log',
+            type: 'unknown_action',
             config: {},
             onError: 'stop',
           },

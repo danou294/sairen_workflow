@@ -54,7 +54,7 @@ export interface Condition {
 
 // --- Actions ---
 
-export type ActionType =
+export type BuiltInActionType =
   | 'send_sms'
   | 'send_email'
   | 'send_whatsapp'
@@ -68,6 +68,9 @@ export type ActionType =
   | 'assign_task'
   | 'update_crm'
   | 'log';
+
+/** Built-in + custom actions (autocomplétion préservée via string & {}) */
+export type ActionType = BuiltInActionType | (string & {});
 
 // --- Step ---
 
