@@ -69,7 +69,7 @@ export const retryConfigSchema = z.object({
 export const stepSchema = z.object({
   id: z.string().uuid(),
   name: z.string().min(1, 'Le nom du step est requis'),
-  type: z.enum(actionTypes),
+  type: z.string().min(1, 'Le type d\'action est requis'),
   config: z.record(z.unknown()),
   condition: conditionSchema.optional(),
   onError: z.enum(['stop', 'skip', 'retry']),
@@ -120,7 +120,26 @@ export const workflowFilterSchema = paginationSchema.extend({
   search: z.string().optional(),
 });
 
+// --- Webhook ---
+
+export const webhookPayloadSchema = z.object({
+  type: z.enum(triggerTypes),
+  payload: z.record(z.unknown()),
+  correlationId: z.string().uuid().optional(),
+  idempotencyKey: z.string().optional(),
+});
+
+// --- Manual trigger ---
+
+export const manualTriggerSchema = z.object({
+  payload: z.record(z.unknown()).default({}),
+  isSandbox: z.boolean().default(false),
+  idempotencyKey: z.string().optional(),
+});
+
 // Types inférés
 export type CreateWorkflowInput = z.infer<typeof createWorkflowSchema>;
 export type UpdateWorkflowInput = z.infer<typeof updateWorkflowSchema>;
 export type WorkflowFilterInput = z.infer<typeof workflowFilterSchema>;
+export type WebhookPayloadInput = z.infer<typeof webhookPayloadSchema>;
+export type ManualTriggerInput = z.infer<typeof manualTriggerSchema>;

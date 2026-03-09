@@ -65,3 +65,11 @@ export class PersistenceError extends WorkflowError {
     this.name = 'PersistenceError';
   }
 }
+
+/** Erreur liée aux triggers */
+export class TriggerError extends WorkflowError {
+  constructor(message: string) {
+    super(message, 'TRIGGER_ERROR');
+    this.name = 'TriggerError';
+  }
+}
