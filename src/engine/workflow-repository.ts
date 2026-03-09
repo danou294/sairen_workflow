@@ -1,6 +1,7 @@
 import { Prisma, WorkflowStatus } from '@prisma/client';
 import prisma from './prisma-client';
 import { WorkflowDefinition, Step, Trigger, Variable } from '../models/types';
+import { PaginationOptions, PaginatedResult } from '../models/pagination';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('workflow-repository');
@@ -10,21 +11,6 @@ export interface WorkflowFilters {
   status?: WorkflowStatus;
   tags?: string[];
   search?: string;
-}
-
-export interface PaginationOptions {
-  page: number;
-  limit: number;
-  sortBy?: string;
-  sortOrder?: 'asc' | 'desc';
-}
-
-export interface PaginatedResult<T> {
-  data: T[];
-  total: number;
-  page: number;
-  limit: number;
-  totalPages: number;
 }
 
 export class WorkflowRepository {
@@ -142,6 +128,20 @@ export class WorkflowRepository {
       limit: pagination.limit,
       totalPages: Math.ceil(total / pagination.limit),
     };
+  }
+
+  /** Trouve les workflows par statut (optionnellement filtrés par orga) */
+  async findByStatus(
+    status: WorkflowStatus,
+    organizationId?: string
+  ): Promise<WorkflowDefinition[]> {
+    const where: Prisma.WorkflowWhereInput = { status };
+    if (organizationId) {
+      where.organizationId = organizationId;
+    }
+
+    const records = await prisma.workflow.findMany({ where });
+    return records.map((r) => this.toWorkflowDefinition(r));
   }
 
   /** Incrémente le compteur d'exécutions */

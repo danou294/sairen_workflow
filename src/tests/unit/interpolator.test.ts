@@ -75,6 +75,20 @@ describe('Interpolator', () => {
     });
   });
 
+  describe('pipes supplémentaires', () => {
+    it('trim devrait supprimer les espaces', () => {
+      expect(interpolate('{{nom | trim}}', { nom: '  Dupont  ' })).toBe('Dupont');
+    });
+
+    it('devrait retourner vide pour une valeur null', () => {
+      expect(interpolate('Bonjour {{nom}}', { nom: null })).toBe('Bonjour ');
+    });
+
+    it('format devrait retourner la valeur brute pour une date invalide', () => {
+      expect(interpolate("{{date | format:'DD/MM/YYYY'}}", { date: 'pas-une-date' })).toBe('pas-une-date');
+    });
+  });
+
   describe('texte sans variables', () => {
     it('devrait retourner le texte tel quel', () => {
       expect(interpolate('Pas de variable ici', {})).toBe('Pas de variable ici');

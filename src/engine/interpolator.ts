@@ -1,20 +1,10 @@
+import { getNestedValue } from '../utils/object';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('interpolator');
 
 // Regex pour capturer {{variable}} ou {{variable | pipe:'arg'}}
 const INTERPOLATION_REGEX = /\{\{([^}]+)\}\}/g;
-
-/**
- * Récupère une valeur imbriquée dans un objet via un chemin pointé
- */
-function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
-  return path.split('.').reduce<unknown>((current, key) => {
-    if (current === null || current === undefined) return undefined;
-    if (typeof current === 'object') return (current as Record<string, unknown>)[key];
-    return undefined;
-  }, obj);
-}
 
 // --- Pipes (filtres) ---
 

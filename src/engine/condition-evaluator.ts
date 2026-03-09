@@ -1,18 +1,11 @@
 import { Condition, ConditionOperator } from '../models/types';
+import { getNestedValue } from '../utils/object';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('condition-evaluator');
 
-/**
- * Récupère une valeur imbriquée dans un objet via un chemin pointé (ex: "patient.prenom")
- */
-function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
-  return path.split('.').reduce<unknown>((current, key) => {
-    if (current === null || current === undefined) return undefined;
-    if (typeof current === 'object') return (current as Record<string, unknown>)[key];
-    return undefined;
-  }, obj);
-}
+/** Taille max de l'input pour les regex (protection ReDoS) */
+const MAX_REGEX_INPUT_LENGTH = 10000;
 
 /**
  * Évalue un opérateur de condition sur une valeur et une valeur de référence
@@ -68,7 +61,10 @@ function evaluateOperator(
     case 'matches':
       if (typeof fieldValue === 'string' && typeof conditionValue === 'string') {
         try {
-          return new RegExp(conditionValue).test(fieldValue);
+          const regex = new RegExp(conditionValue);
+          // Protection ReDoS : limiter la taille de l'input
+          const safeInput = fieldValue.slice(0, MAX_REGEX_INPUT_LENGTH);
+          return regex.test(safeInput);
         } catch {
           logger.warn({ pattern: conditionValue }, 'Regex invalide dans la condition');
           return false;

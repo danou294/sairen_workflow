@@ -59,6 +59,14 @@ describe('ConditionEvaluator', () => {
     it('in devrait rejeter une valeur hors liste', () => {
       expect(evaluateCondition({ field: 'source', operator: 'in', value: ['doctolib', 'web'] }, { source: 'phone' })).toBe(false);
     });
+
+    it('not_in devrait rejeter une valeur dans la liste', () => {
+      expect(evaluateCondition({ field: 'source', operator: 'not_in', value: ['doctolib', 'web'] }, { source: 'doctolib' })).toBe(false);
+    });
+
+    it('not_in devrait matcher une valeur hors liste', () => {
+      expect(evaluateCondition({ field: 'source', operator: 'not_in', value: ['doctolib', 'web'] }, { source: 'phone' })).toBe(true);
+    });
   });
 
   describe('matches (regex)', () => {
@@ -68,6 +76,52 @@ describe('ConditionEvaluator', () => {
 
     it('devrait rejeter un pattern qui ne matche pas', () => {
       expect(evaluateCondition({ field: 'phone', operator: 'matches', value: '^06' }, { phone: '0112345678' })).toBe(false);
+    });
+  });
+
+  describe('date_before / date_after', () => {
+    it('date_before devrait comparer des dates', () => {
+      expect(evaluateCondition(
+        { field: 'rdv', operator: 'date_before', value: '2026-04-01' },
+        { rdv: '2026-03-15' }
+      )).toBe(true);
+    });
+
+    it('date_before devrait rejeter une date postérieure', () => {
+      expect(evaluateCondition(
+        { field: 'rdv', operator: 'date_before', value: '2026-03-01' },
+        { rdv: '2026-03-15' }
+      )).toBe(false);
+    });
+
+    it('date_after devrait comparer des dates', () => {
+      expect(evaluateCondition(
+        { field: 'rdv', operator: 'date_after', value: '2026-03-01' },
+        { rdv: '2026-03-15' }
+      )).toBe(true);
+    });
+
+    it('date_after devrait rejeter une date antérieure', () => {
+      expect(evaluateCondition(
+        { field: 'rdv', operator: 'date_after', value: '2026-04-01' },
+        { rdv: '2026-03-15' }
+      )).toBe(false);
+    });
+
+    it('devrait retourner false pour des dates invalides', () => {
+      expect(evaluateCondition(
+        { field: 'rdv', operator: 'date_before', value: 'pas-une-date' },
+        { rdv: '2026-03-15' }
+      )).toBe(false);
+    });
+  });
+
+  describe('matches — cas limites', () => {
+    it('devrait retourner false pour une regex invalide', () => {
+      expect(evaluateCondition(
+        { field: 'phone', operator: 'matches', value: '[invalid(' },
+        { phone: '0612345678' }
+      )).toBe(false);
     });
   });
 

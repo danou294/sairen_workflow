@@ -1,5 +1,6 @@
 import Fastify from 'fastify';
 import { config } from './config';
+import prisma from './engine/prisma-client';
 import { createLogger } from './utils/logger';
 
 const logger = createLogger('server');
@@ -61,6 +62,7 @@ async function start() {
     process.on(signal, async () => {
       logger.info({ signal }, 'Signal reçu, arrêt gracieux...');
       await app.close();
+      await prisma.$disconnect();
       process.exit(0);
     });
   }

@@ -1,6 +1,11 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { WorkflowEngine } from '../../engine/workflow-engine';
 import { WorkflowDefinition } from '../../models/types';
+import {
+  WorkflowNotFoundError,
+  ExecutionNotAllowedError,
+  InvalidTransitionError,
+} from '../../errors/workflow-errors';
 
 function createTestWorkflow(overrides: Partial<WorkflowDefinition> = {}): WorkflowDefinition {
   return {
@@ -157,6 +162,27 @@ describe('WorkflowEngine', () => {
 
     it('devrait rejeter un workflow inexistant', async () => {
       await expect(engine.execute('inexistant', {})).rejects.toThrow('introuvable');
+    });
+
+    it('devrait rejeter l\'exécution d\'un workflow DRAFT', async () => {
+      engine.register(createTestWorkflow({ status: 'DRAFT' }));
+      await expect(engine.execute('test-wf-1', {})).rejects.toThrow(ExecutionNotAllowedError);
+    });
+
+    it('devrait rejeter l\'exécution d\'un workflow ARCHIVED', async () => {
+      engine.register(createTestWorkflow({ status: 'ARCHIVED' }));
+      await expect(engine.execute('test-wf-1', {})).rejects.toThrow(ExecutionNotAllowedError);
+    });
+
+    it('devrait rejeter TESTING sans mode sandbox', async () => {
+      engine.register(createTestWorkflow({ status: 'TESTING' }));
+      await expect(engine.execute('test-wf-1', {})).rejects.toThrow(ExecutionNotAllowedError);
+    });
+
+    it('devrait permettre TESTING en mode sandbox', async () => {
+      engine.register(createTestWorkflow({ status: 'TESTING' }));
+      const result = await engine.execute('test-wf-1', {}, { isSandbox: true });
+      expect(result.status).toBe('COMPLETED');
     });
 
     it('devrait enrichir le contexte entre les steps', async () => {
@@ -333,14 +359,71 @@ describe('WorkflowEngine', () => {
     });
 
     it('devrait incrémenter le compteur d\'exécutions', async () => {
-      const wf = createTestWorkflow();
-      engine.register(wf);
+      engine.register(createTestWorkflow());
 
       await engine.execute('test-wf-1', {});
       await engine.execute('test-wf-1', {});
 
+      const wf = engine.getWorkflow('test-wf-1')!;
       expect(wf.metadata.executionCount).toBe(2);
       expect(wf.metadata.lastExecutedAt).toBeDefined();
+    });
+
+    it('devrait compter les retries dans le résultat', async () => {
+      let callCount = 0;
+      engine.registerAction('flaky_action', async () => {
+        callCount++;
+        if (callCount < 3) throw new Error('Temporaire');
+        return { ok: true };
+      });
+
+      const wf = createTestWorkflow({
+        steps: [
+          {
+            id: 'step-retry',
+            name: 'Retry step',
+            type: 'flaky_action' as 'log',
+            config: {},
+            onError: 'retry',
+            retryConfig: { maxRetries: 3, backoffMs: 1, backoffMultiplier: 1 },
+          },
+        ],
+      });
+
+      engine.register(wf);
+      const result = await engine.execute('test-wf-1', {});
+
+      expect(result.status).toBe('COMPLETED');
+      expect(result.steps[0].status).toBe('success');
+      expect(result.steps[0].retryCount).toBe(2);
+    });
+
+    it('devrait interpoler la config de manière récursive', async () => {
+      engine.registerAction('check_config', async (step) => {
+        return step.config;
+      });
+
+      const wf = createTestWorkflow({
+        steps: [
+          {
+            id: 'step-interp',
+            name: 'Interpolation récursive',
+            type: 'check_config' as 'log',
+            config: {
+              message: 'Bonjour {{prenom}}',
+              nested: { greeting: 'Salut {{prenom}}' },
+            },
+            onError: 'stop',
+          },
+        ],
+      });
+
+      engine.register(wf);
+      const result = await engine.execute('test-wf-1', { prenom: 'Jean' });
+
+      const output = result.steps[0].output as Record<string, unknown>;
+      expect(output.message).toBe('Bonjour Jean');
+      expect((output.nested as Record<string, unknown>).greeting).toBe('Salut Jean');
     });
   });
 
@@ -476,6 +559,19 @@ describe('WorkflowEngine', () => {
       expect(engine.getExecutionHistory('wf-a')).toHaveLength(2);
       expect(engine.getExecutionHistory('wf-b')).toHaveLength(1);
       expect(engine.getExecutionHistory()).toHaveLength(3);
+    });
+  });
+
+  describe('memory leak protection', () => {
+    it('devrait limiter la taille de l\'historique', async () => {
+      const smallEngine = new WorkflowEngine({ maxHistorySize: 3 });
+      smallEngine.register(createTestWorkflow());
+
+      for (let i = 0; i < 5; i++) {
+        await smallEngine.execute('test-wf-1', {});
+      }
+
+      expect(smallEngine.getExecutionHistory()).toHaveLength(3);
     });
   });
 });

@@ -41,7 +41,15 @@ const envSchema = z.object({
 const parsed = envSchema.safeParse(process.env);
 
 if (!parsed.success) {
-  console.error('❌ Configuration invalide :', parsed.error.flatten().fieldErrors);
+  // JSON structuré sur stderr (le logger Pino n'est pas encore initialisé)
+  const errorPayload = {
+    level: 'fatal',
+    msg: 'Configuration invalide',
+    errors: parsed.error.flatten().fieldErrors,
+    timestamp: new Date().toISOString(),
+    service: 'sairen-workflow',
+  };
+  process.stderr.write(JSON.stringify(errorPayload) + '\n');
   process.exit(1);
 }
 

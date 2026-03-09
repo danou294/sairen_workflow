@@ -1,6 +1,7 @@
 import { Prisma, ExecutionStatus } from '@prisma/client';
 import prisma from './prisma-client';
 import { ExecutionRecord, StepResult } from '../models/types';
+import { PaginationOptions, PaginatedResult } from '../models/pagination';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('execution-repository');
@@ -11,21 +12,6 @@ export interface ExecutionFilters {
   startDate?: Date;
   endDate?: Date;
   isSandbox?: boolean;
-}
-
-export interface PaginationOptions {
-  page: number;
-  limit: number;
-  sortBy?: string;
-  sortOrder?: 'asc' | 'desc';
-}
-
-export interface PaginatedResult<T> {
-  data: T[];
-  total: number;
-  page: number;
-  limit: number;
-  totalPages: number;
 }
 
 export class ExecutionRepository {
