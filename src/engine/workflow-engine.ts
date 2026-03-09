@@ -4,12 +4,14 @@ import {
   ExecutionRecord,
   Step,
   StepResult,
-  ErrorStrategy,
   VALID_TRANSITIONS,
   WorkflowStatus,
 } from '../models/types';
 import { evaluateCondition } from './condition-evaluator';
 import { interpolate } from './interpolator';
+import { WorkflowValidator } from './workflow-validator';
+import { WorkflowRepository } from './workflow-repository';
+import { ExecutionRepository } from './execution-repository';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('workflow-engine');
@@ -21,14 +23,33 @@ type ActionHandler = (
   context: Record<string, unknown>
 ) => Promise<unknown>;
 
+// --- Options du moteur ---
+
+export interface EngineOptions {
+  /** Utiliser Prisma pour la persistance (false = in-memory pour les tests) */
+  persistent?: boolean;
+}
+
 // --- Moteur principal ---
 
 export class WorkflowEngine {
   private workflows: Map<string, WorkflowDefinition> = new Map();
   private actionHandlers: Map<string, ActionHandler> = new Map();
   private executionHistory: ExecutionRecord[] = [];
+  private validator: WorkflowValidator;
+  private workflowRepo?: WorkflowRepository;
+  private executionRepo?: ExecutionRepository;
+  private persistent: boolean;
 
-  constructor() {
+  constructor(options: EngineOptions = {}) {
+    this.persistent = options.persistent ?? false;
+    this.validator = new WorkflowValidator();
+
+    if (this.persistent) {
+      this.workflowRepo = new WorkflowRepository();
+      this.executionRepo = new ExecutionRepository();
+    }
+
     this.registerBuiltInActions();
   }
 
@@ -37,6 +58,17 @@ export class WorkflowEngine {
   register(workflow: WorkflowDefinition): void {
     logger.info({ workflowId: workflow.id, name: workflow.name }, 'Workflow enregistré');
     this.workflows.set(workflow.id, workflow);
+  }
+
+  /** Enregistre avec validation préalable */
+  registerWithValidation(workflow: WorkflowDefinition): { success: boolean; errors?: { field: string; message: string }[] } {
+    const validation = this.validator.validate(workflow);
+    if (!validation.valid) {
+      logger.warn({ workflowId: workflow.id, errors: validation.errors }, 'Validation échouée');
+      return { success: false, errors: validation.errors };
+    }
+    this.register(workflow);
+    return { success: true };
   }
 
   unregister(workflowId: string): void {
@@ -51,6 +83,46 @@ export class WorkflowEngine {
     return Array.from(this.workflows.values());
   }
 
+  /** Charge un workflow depuis la DB et le met en cache mémoire */
+  async loadFromDB(workflowId: string): Promise<WorkflowDefinition | null> {
+    if (!this.workflowRepo) {
+      throw new Error('Mode persistant non activé');
+    }
+
+    const workflow = await this.workflowRepo.findById(workflowId);
+    if (workflow) {
+      this.workflows.set(workflow.id, workflow);
+      logger.info({ workflowId, name: workflow.name }, 'Workflow chargé depuis la DB');
+    }
+    return workflow;
+  }
+
+  /** Charge tous les workflows LIVE et TESTING depuis la DB */
+  async loadActiveWorkflows(): Promise<number> {
+    if (!this.workflowRepo) {
+      throw new Error('Mode persistant non activé');
+    }
+
+    // On charge les LIVE et TESTING de toutes les orgas
+    // En production, on filtrerait par organizationId
+    let loaded = 0;
+
+    for (const status of ['LIVE', 'TESTING'] as WorkflowStatus[]) {
+      const result = await this.workflowRepo.findWithPagination(
+        { organizationId: '', status: status as 'LIVE' | 'TESTING' },
+        { page: 1, limit: 1000 }
+      );
+
+      for (const wf of result.data) {
+        this.workflows.set(wf.id, wf);
+        loaded++;
+      }
+    }
+
+    logger.info({ count: loaded }, 'Workflows actifs chargés depuis la DB');
+    return loaded;
+  }
+
   // --- Lifecycle ---
 
   changeStatus(workflowId: string, newStatus: WorkflowStatus): WorkflowDefinition {
@@ -59,16 +131,50 @@ export class WorkflowEngine {
       throw new Error(`Workflow "${workflowId}" introuvable`);
     }
 
-    const validTransitions = VALID_TRANSITIONS[workflow.status];
-    if (!validTransitions.includes(newStatus)) {
-      throw new Error(
-        `Transition invalide : ${workflow.status} → ${newStatus}. Transitions valides : ${validTransitions.join(', ')}`
-      );
+    // Valider la transition
+    const transitionResult = this.validator.validateTransition(workflow.status, newStatus);
+    if (!transitionResult.valid) {
+      throw new Error(transitionResult.errors[0].message);
     }
 
+    // Validations supplémentaires selon la cible
+    if (newStatus === 'TESTING') {
+      const testResult = this.validator.validateForTesting(workflow);
+      if (!testResult.valid) {
+        throw new Error(
+          `Impossible de passer en TESTING : ${testResult.errors.map((e) => e.message).join(', ')}`
+        );
+      }
+    }
+
+    if (newStatus === 'LIVE') {
+      const liveResult = this.validator.validateForLive(workflow);
+      if (!liveResult.valid) {
+        throw new Error(
+          `Impossible de passer en LIVE : ${liveResult.errors.map((e) => e.message).join(', ')}`
+        );
+      }
+    }
+
+    const previousStatus = workflow.status;
     workflow.status = newStatus;
     workflow.metadata.updatedAt = new Date().toISOString();
-    logger.info({ workflowId, from: workflow.status, to: newStatus }, 'Statut du workflow modifié');
+
+    logger.info(
+      { workflowId, from: previousStatus, to: newStatus },
+      'Statut du workflow modifié'
+    );
+
+    return workflow;
+  }
+
+  /** Change le statut avec persistance DB */
+  async changeStatusPersistent(workflowId: string, newStatus: WorkflowStatus): Promise<WorkflowDefinition> {
+    const workflow = this.changeStatus(workflowId, newStatus);
+
+    if (this.workflowRepo) {
+      await this.workflowRepo.changeStatus(workflowId, newStatus as 'DRAFT' | 'TESTING' | 'LIVE' | 'ARCHIVED');
+    }
 
     return workflow;
   }
@@ -87,12 +193,22 @@ export class WorkflowEngine {
 
     // Vérifier l'idempotence
     if (options.idempotencyKey) {
+      // D'abord en mémoire
       const existing = this.executionHistory.find(
         (e) => e.idempotencyKey === options.idempotencyKey
       );
       if (existing) {
         logger.info({ idempotencyKey: options.idempotencyKey }, 'Exécution déjà traitée (idempotent)');
         return existing;
+      }
+
+      // Puis en DB si persistant
+      if (this.executionRepo) {
+        const dbExisting = await this.executionRepo.findByIdempotencyKey(options.idempotencyKey);
+        if (dbExisting) {
+          logger.info({ idempotencyKey: options.idempotencyKey }, 'Exécution déjà traitée (idempotent, DB)');
+          return dbExisting;
+        }
       }
     }
 
@@ -108,6 +224,11 @@ export class WorkflowEngine {
       isSandbox: options.isSandbox ?? false,
       startedAt: new Date().toISOString(),
     };
+
+    // Persister l'exécution en DB (status: RUNNING)
+    if (this.executionRepo) {
+      await this.executionRepo.create(execution);
+    }
 
     const startTime = Date.now();
 
@@ -125,6 +246,11 @@ export class WorkflowEngine {
         if (stepResult.output !== undefined) {
           execution.context[`step_${step.id}`] = stepResult.output;
           execution.context[step.name] = stepResult.output;
+        }
+
+        // Persister les steps après chaque step
+        if (this.executionRepo) {
+          await this.executionRepo.updateSteps(execution.id, execution.steps);
         }
 
         // Si le step a échoué et la stratégie est "stop", arrêter
@@ -147,9 +273,25 @@ export class WorkflowEngine {
       execution.duration = Date.now() - startTime;
       this.executionHistory.push(execution);
 
+      // Finaliser en DB
+      if (this.executionRepo) {
+        await this.executionRepo.complete(execution.id, {
+          status: execution.status as 'COMPLETED' | 'FAILED',
+          steps: execution.steps,
+          context: execution.context,
+          error: execution.error,
+          completedAt: execution.completedAt,
+          duration: execution.duration,
+        });
+      }
+
       // Mettre à jour les stats du workflow
       workflow.metadata.executionCount++;
       workflow.metadata.lastExecutedAt = execution.startedAt;
+
+      if (this.workflowRepo) {
+        await this.workflowRepo.incrementExecutionCount(workflowId);
+      }
 
       logger.info(
         {
@@ -194,6 +336,20 @@ export class WorkflowEngine {
       ? step.retryConfig.maxRetries + 1
       : 1;
 
+    // Mode sandbox : simuler les actions de communication sans les exécuter
+    if (isSandbox && ['send_sms', 'send_email', 'send_whatsapp'].includes(step.type)) {
+      logger.info({ stepId: step.id, type: step.type }, 'Action simulée (sandbox)');
+      return {
+        stepId: step.id,
+        stepName: step.name,
+        status: 'success',
+        output: { sandbox: true, message: 'Action simulée en mode sandbox' },
+        startedAt: new Date(startTime).toISOString(),
+        completedAt: new Date().toISOString(),
+        duration: Date.now() - startTime,
+      };
+    }
+
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       try {
         if (attempt > 0) {
@@ -211,20 +367,6 @@ export class WorkflowEngine {
         // Interpoler la config du step
         const interpolatedConfig = this.interpolateConfig(step.config, context);
         const stepWithInterpolatedConfig = { ...step, config: interpolatedConfig };
-
-        // Mode sandbox : ne pas exécuter les actions de communication
-        if (isSandbox && ['send_sms', 'send_email', 'send_whatsapp'].includes(step.type)) {
-          logger.info({ stepId: step.id, type: step.type }, 'Action simulée (sandbox)');
-          return {
-            stepId: step.id,
-            stepName: step.name,
-            status: 'success',
-            output: { sandbox: true, message: 'Action simulée en mode sandbox' },
-            startedAt: new Date(startTime).toISOString(),
-            completedAt: new Date().toISOString(),
-            duration: Date.now() - startTime,
-          };
-        }
 
         const output = await handler(stepWithInterpolatedConfig, context);
 
@@ -362,10 +504,40 @@ export class WorkflowEngine {
     };
   }
 
+  /** Stats depuis la DB */
+  async getStatsPersistent(workflowId?: string): Promise<{
+    total: number;
+    completed: number;
+    failed: number;
+    avgDuration: number;
+  }> {
+    if (!this.executionRepo) {
+      return this.getStats(workflowId);
+    }
+    return this.executionRepo.getStats(workflowId);
+  }
+
   getExecutionHistory(workflowId?: string): ExecutionRecord[] {
     if (workflowId) {
       return this.executionHistory.filter((e) => e.workflowId === workflowId);
     }
     return [...this.executionHistory];
+  }
+
+  /** Historique depuis la DB */
+  async getExecutionHistoryPersistent(workflowId?: string): Promise<ExecutionRecord[]> {
+    if (!this.executionRepo) {
+      return this.getExecutionHistory(workflowId);
+    }
+    if (workflowId) {
+      return this.executionRepo.findByWorkflowId(workflowId);
+    }
+    const result = await this.executionRepo.findWithPagination({}, { page: 1, limit: 100 });
+    return result.data;
+  }
+
+  /** Accès au validateur */
+  getValidator(): WorkflowValidator {
+    return this.validator;
   }
 }
